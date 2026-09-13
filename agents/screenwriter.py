@@ -10,6 +10,7 @@ from typing import List, Optional
 from pydantic import BaseModel, Field
 
 logger = logging.getLogger(__name__)
+import time
 
 BASE_URL = "https://apihub.agnes-ai.com/v1"
 
@@ -25,12 +26,47 @@ class Screenwriter:
             "Content-Type": "application/json",
         }
 
+    def _post_with_retry(self, url: str, json_payload: dict, max_retries: int = 6, base_delay: float = 30.0):
+        """POST with automatic retry on 429 / 5xx / timeout."""
+        for attempt in range(max_retries):
+            try:
+                resp = requests.post(
+                    url,
+                    headers=self.headers,
+                    json=json_payload,
+                    timeout=None,
+                )
+                if resp.status_code == 429:
+                    delay = base_delay * (attempt + 1)
+                    logger.warning(
+                        f"[Screenwriter] 429 rate limit, retry {attempt+1}/{max_retries} in {delay:.0f}s"
+                    )
+                    print(f"  ⚠️  限流 429，{delay:.0f}s 后重试 ({attempt+1}/{max_retries})...", flush=True)
+                    time.sleep(delay)
+                    continue
+                if resp.status_code >= 500:
+                    delay = base_delay * (attempt + 1)
+                    logger.warning(
+                        f"[Screenwriter] {resp.status_code} server error, retry {attempt+1}/{max_retries} in {delay:.0f}s"
+                    )
+                    print(f"  ⚠️  服务端 {resp.status_code}，{delay:.0f}s 后重试 ({attempt+1}/{max_retries})...", flush=True)
+                    time.sleep(delay)
+                    continue
+                resp.raise_for_status()
+                return resp
+            except (requests.exceptions.Timeout, requests.exceptions.ConnectionError) as e:
+                delay = base_delay * (attempt + 1)
+                logger.warning(f"[Screenwriter] Network error ({type(e).__name__}), retry {attempt+1}/{max_retries} in {delay:.0f}s")
+                print(f"  ⚠  网络错误，{delay:.0f}s 后重试 ({attempt+1}/{max_retries})...", flush=True)
+                time.sleep(delay)
+                continue
+        raise RuntimeError(f"[Screenwriter] max retries ({max_retries}) exceeded")
+        
     def _chat(self, system_prompt: str, user_prompt: str) -> str:
         """Call Agnes chat API and return content."""
-        resp = requests.post(
+        resp = self._post_with_retry(
             f"{BASE_URL}/chat/completions",
-            headers=self.headers,
-            json={
+            {
                 "model": self.model,
                 "messages": [
                     {"role": "system", "content": system_prompt},
@@ -39,9 +75,7 @@ class Screenwriter:
                 "temperature": 0.7,
                 "max_tokens": 4096,
             },
-            timeout=None,
         )
-        resp.raise_for_status()
         data = resp.json()
         return data["choices"][0]["message"]["content"]
 
@@ -87,18 +121,15 @@ class Screenwriter:
                 })
         messages.append({"role": "user", "content": user_content})
 
-        resp = requests.post(
+        resp = self._post_with_retry(
             f"{BASE_URL}/chat/completions",
-            headers=self.headers,
-            json={
+            {
                 "model": self.model,
                 "messages": messages,
                 "temperature": 0.7,
                 "max_tokens": 4096,
             },
-            timeout=None,
         )
-        resp.raise_for_status()
         data = resp.json()
         return data["choices"][0]["message"]["content"]
 

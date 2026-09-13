@@ -226,12 +226,13 @@ class VideoGeneratorAgnesAPI:
                 logger.error(f"[Agnes Video] HTTP {resp.status_code}: {error_detail}")
                 raise RuntimeError(f"Agnes video submit failed (HTTP {resp.status_code}): {error_detail}")
 
-            except requests.exceptions.Timeout:
+            except (requests.exceptions.Timeout, requests.exceptions.ConnectionError) as e:
                 delay = self.retry_base_delay * (attempt + 1)
                 logger.warning(
-                    f"[Agnes Video] Timeout on {mode_desc}, "
+                    f"[Agnes Video] Network error on {mode_desc}: {e}, "
                     f"retry {attempt+1}/{self.max_retries} in {delay:.0f}s..."
                 )
+                print(f"  ⚠️  网络错误，{delay:.0f}s 后重试 ({attempt+1}/{self.max_retries})...", flush=True)
                 time.sleep(delay)
                 continue
 
