@@ -5,12 +5,12 @@ import json
 import logging
 import mimetypes
 import os
+import time
 import requests
 from typing import List, Optional
 from pydantic import BaseModel, Field
 
 logger = logging.getLogger(__name__)
-import time
 
 BASE_URL = "https://apihub.agnes-ai.com/v1"
 
@@ -18,16 +18,30 @@ BASE_URL = "https://apihub.agnes-ai.com/v1"
 class Screenwriter:
     """Develops stories from ideas and writes scripts scene by scene."""
 
-    def __init__(self, api_key: str, model: str = "agnes-2.0-flash"):
+    def __init__(self, api_key: str, model: str = "agnes-2.0-flash", min_interval: float = 4.0):
         self.api_key = api_key
         self.model = model
+        self.min_interval = min_interval
+        self._last_call_time = 0.0
         self.headers = {
             "Authorization": f"Bearer {api_key}",
             "Content-Type": "application/json",
         }
 
-    def _post_with_retry(self, url: str, json_payload: dict, max_retries: int = 6, base_delay: float = 30.0):
-        """POST with automatic retry on 429 / 5xx / timeout."""
+
+    def _post_with_retry(self, url: str, json_payload: dict, max_retries: int = 6, base_delay: float = 15.0):
+        """POST with throttling and retry on 429 / 5xx / timeout / network error."""
+        import random
+
+        # ── 主动节流：距上次调用太近就先等一会 ──
+        if self._last_call_time > 0:
+            elapsed = time.time() - self._last_call_time
+            if elapsed < self.min_interval:
+                wait = self.min_interval - elapsed
+                logger.debug(f"[Screenwriter] Throttling {wait:.1f}s before next call")
+                time.sleep(wait)
+
+        last_exc = None
         for attempt in range(max_retries):
             try:
                 resp = requests.post(
@@ -36,31 +50,41 @@ class Screenwriter:
                     json=json_payload,
                     timeout=None,
                 )
+                self._last_call_time = time.time()
+
                 if resp.status_code == 429:
-                    delay = base_delay * (attempt + 1)
+                    delay = min(base_delay * (2 ** attempt) + random.uniform(0, 5), 180)
                     logger.warning(
                         f"[Screenwriter] 429 rate limit, retry {attempt+1}/{max_retries} in {delay:.0f}s"
                     )
                     print(f"  ⚠️  限流 429，{delay:.0f}s 后重试 ({attempt+1}/{max_retries})...", flush=True)
                     time.sleep(delay)
                     continue
+
                 if resp.status_code >= 500:
-                    delay = base_delay * (attempt + 1)
+                    delay = min(base_delay * (2 ** attempt) + random.uniform(0, 5), 180)
                     logger.warning(
                         f"[Screenwriter] {resp.status_code} server error, retry {attempt+1}/{max_retries} in {delay:.0f}s"
                     )
                     print(f"  ⚠️  服务端 {resp.status_code}，{delay:.0f}s 后重试 ({attempt+1}/{max_retries})...", flush=True)
                     time.sleep(delay)
                     continue
+
                 resp.raise_for_status()
                 return resp
+
             except (requests.exceptions.Timeout, requests.exceptions.ConnectionError) as e:
-                delay = base_delay * (attempt + 1)
-                logger.warning(f"[Screenwriter] Network error ({type(e).__name__}), retry {attempt+1}/{max_retries} in {delay:.0f}s")
-                print(f"  ⚠  网络错误，{delay:.0f}s 后重试 ({attempt+1}/{max_retries})...", flush=True)
+                last_exc = e
+                self._last_call_time = time.time()
+                delay = min(base_delay * (2 ** attempt) + random.uniform(0, 5), 180)
+                logger.warning(
+                    f"[Screenwriter] Network error ({type(e).__name__}), retry {attempt+1}/{max_retries} in {delay:.0f}s"
+                )
+                print(f"  ⚠️  网络错误，{delay:.0f}s 后重试 ({attempt+1}/{max_retries})...", flush=True)
                 time.sleep(delay)
                 continue
-        raise RuntimeError(f"[Screenwriter] max retries ({max_retries}) exceeded")
+
+        raise RuntimeError(f"[Screenwriter] max retries ({max_retries}) exceeded: {last_exc}")
         
     def _chat(self, system_prompt: str, user_prompt: str) -> str:
         """Call Agnes chat API and return content."""

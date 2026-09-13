@@ -9,6 +9,7 @@ import base64
 import logging
 import mimetypes
 import os
+import time
 from typing import List, Optional
 import requests
 from interfaces.image_output import ImageOutput
@@ -30,6 +31,56 @@ class ImageGeneratorAgnesAPI:
             "Content-Type": "application/json",
         }
 
+    def _post_with_retry(
+        self,
+        url: str,
+        json_payload: dict,
+        max_retries: int = 5,
+        base_delay: float = 10.0,
+        timeout: int = 120,
+    ):
+        """POST with automatic retry on 429 / 5xx / timeout / network error."""
+        last_exc = None
+        for attempt in range(max_retries):
+            try:
+                resp = requests.post(
+                    url,
+                    headers=self.headers,
+                    json=json_payload,
+                    timeout=timeout,
+                )
+                if resp.status_code == 429:
+                    delay = min(base_delay * (2 ** attempt), 120)
+                    logger.warning(
+                        f"[Agnes Image] 429 rate limit, retry {attempt+1}/{max_retries} in {delay:.0f}s"
+                    )
+                    print(f"  ⚠️  图片限流 429，{delay:.0f}s 后重试 ({attempt+1}/{max_retries})...", flush=True)
+                    time.sleep(delay)
+                    continue
+                if resp.status_code >= 500:
+                    delay = min(base_delay * (2 ** attempt), 120)
+                    logger.warning(
+                        f"[Agnes Image] {resp.status_code} server error, retry {attempt+1}/{max_retries} in {delay:.0f}s"
+                    )
+                    print(f"  ⚠️  图片服务端 {resp.status_code}，{delay:.0f}s 后重试 ({attempt+1}/{max_retries})...", flush=True)
+                    time.sleep(delay)
+                    continue
+
+                if 400 <= resp.status_code < 500 and resp.status_code != 429:
+                    logger.error(f"[Agnes Image] HTTP {resp.status_code}: {resp.text[:500]}")                    
+                resp.raise_for_status()
+                return resp
+            except (requests.exceptions.Timeout, requests.exceptions.ConnectionError) as e:
+                last_exc = e
+                delay = min(base_delay * (2 ** attempt), 120)
+                logger.warning(
+                    f"[Agnes Image] Network error ({type(e).__name__}), retry {attempt+1}/{max_retries} in {delay:.0f}s"
+                )
+                print(f"  ⚠️  图片网络错误，{delay:.0f}s 后重试 ({attempt+1}/{max_retries})...", flush=True)
+                time.sleep(delay)
+                continue
+        raise RuntimeError(f"[Agnes Image] max retries ({max_retries}) exceeded: {last_exc}")
+        
     def _path_to_b64(self, path: str) -> str:
         """Convert a local image file path to base64 data URI."""
         with open(path, "rb") as f:
@@ -81,22 +132,13 @@ class ImageGeneratorAgnesAPI:
         print(f"  🖼️ 正在生成图片...", flush=True)
         logger.info(f"[Agnes Image] Generating ({'i2i' if use_i2i else 't2i'}): {prompt[:80]}...")
 
-        try:
-            resp = requests.post(
-                f"{BASE_URL}/images/generations",
-                headers=self.headers,
-                json=payload,
-                timeout=60,
-            )
-            resp.raise_for_status()
-        except requests.exceptions.HTTPError as e:
-            error_detail = ""
-            try:
-                error_detail = resp.text[:500]
-            except Exception:
-                pass
-            logger.error(f"[Agnes Image] HTTP {resp.status_code}: {error_detail}")
-            raise
+        resp = self._post_with_retry(
+            f"{BASE_URL}/images/generations",
+            payload,
+            max_retries=5,
+            base_delay=10.0,
+            timeout=120,
+        )
 
         result = resp.json()
 

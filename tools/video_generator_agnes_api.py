@@ -203,7 +203,7 @@ class VideoGeneratorAgnesAPI:
 
                 # Rate limited — wait and retry
                 if resp.status_code == 429:
-                    delay = self.retry_base_delay * (attempt + 1)
+                    delay = min(self.retry_base_delay * (2 ** attempt) + 5, 180)
                     logger.warning(
                         f"[Agnes Video] 429 rate limit on {mode_desc}, "
                         f"retry {attempt+1}/{self.max_retries} in {delay:.0f}s..."
@@ -213,7 +213,7 @@ class VideoGeneratorAgnesAPI:
 
                 # Server error — wait and retry
                 if resp.status_code >= 500:
-                    delay = self.retry_base_delay * (attempt + 1)
+                    delay = min(self.retry_base_delay * (2 ** attempt) + 5, 180)
                     logger.warning(
                         f"[Agnes Video] {resp.status_code} server error on {mode_desc}, "
                         f"retry {attempt+1}/{self.max_retries} in {delay:.0f}s..."
@@ -227,9 +227,9 @@ class VideoGeneratorAgnesAPI:
                 raise RuntimeError(f"Agnes video submit failed (HTTP {resp.status_code}): {error_detail}")
 
             except (requests.exceptions.Timeout, requests.exceptions.ConnectionError) as e:
-                delay = self.retry_base_delay * (attempt + 1)
+                delay = min(self.retry_base_delay * (2 ** attempt) + 5, 180)
                 logger.warning(
-                    f"[Agnes Video] Network error on {mode_desc}: {e}, "
+                    f"[Agnes Video] Network error on {mode_desc}: {type(e).__name__}, "
                     f"retry {attempt+1}/{self.max_retries} in {delay:.0f}s..."
                 )
                 print(f"  ⚠️  网络错误，{delay:.0f}s 后重试 ({attempt+1}/{self.max_retries})...", flush=True)

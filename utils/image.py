@@ -1,11 +1,20 @@
 import logging
 import requests
-from tenacity import retry, stop_after_attempt
+from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
 
 logger = logging.getLogger(__name__)
 
 
-@retry(stop=stop_after_attempt(3))
+@retry(
+    retry=retry_if_exception_type((
+        requests.exceptions.Timeout,
+        requests.exceptions.ConnectionError,
+        requests.exceptions.HTTPError,
+    )),
+    stop=stop_after_attempt(5),
+    wait=wait_exponential(multiplier=2, min=5, max=60),
+    reraise=True,
+)
 def download_image(url: str, save_path: str) -> None:
     """Download an image from URL and save to disk."""
     logger.info(f"Downloading image from {url} to {save_path}")
