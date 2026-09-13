@@ -363,7 +363,11 @@ class Idea2VideoPipeline:
             print(f"🎬 提交 {len(new_submissions)} 个视频任务 (keyframes)")
             print(f"{'='*60}")
 
-        for info in new_submissions:
+        # 每次提交之间的最小间隔（秒）。服务端限流窗口约 30s，
+        # 这里主动等待，避免连续提交触发 429。
+        SUBMIT_INTERVAL = 25
+
+        for i, info in enumerate(new_submissions):
             scene_idx = info["scene_idx"]
             print(f"  📤 提交 Scene {scene_idx}...", flush=True)
             video_id = self.video_generator.submit_video(
@@ -378,6 +382,11 @@ class Idea2VideoPipeline:
             _save_task(info["scene_dir"], video_id)
             print(f"  ✅ Scene {scene_idx} 已提交 (video: {video_id[:20]}...)", flush=True)
             print(f"  🔍 手动查询: {_make_curl(video_id)}", flush=True)
+
+            # 不是最后一个才等，最后一个提交完直接进入等待阶段
+            if i < len(new_submissions) - 1:
+                print(f"  ⏸️  等待 {SUBMIT_INTERVAL}s 避免限流...", flush=True)
+                await asyncio.sleep(SUBMIT_INTERVAL)
 
         # ── Phase 2: Wait for results sequentially ──
         if pending:
