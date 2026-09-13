@@ -10,15 +10,10 @@
 > - Chat 调用之间加入**最小间隔控制**，减少 429
 > - 修复了原版一处 DNS 抖动即崩溃的问题
 > - 移除 `start.sh`，统一使用 `python run_creative.py`（跨平台）
->
-> ⚠️ 原项目已迁移至 [agnes-video-generator](https://github.com/lcy362/agnes-video-generator)
-> （完全重写版，带 Web UI、TTS、字幕等）。本 fork 基于早期的 `vimax-agnes` 代码库。
 
 **免费 AI 视频生成 —— 用 Agnes AI 免费模型，把任意文字创意变成多场景、角色一致的完整视频。**
 
 > 使用 Agnes AI 免费模型（`agnes-video-v2.0`、`agnes-image-2.1-flash`、`agnes-2.0-flash`）从文本生成视频 —— 无需 GPU、无需信用卡，只需一个 API Key。
-
-[English](README_EN.md) | 中文
 
 ---
 
